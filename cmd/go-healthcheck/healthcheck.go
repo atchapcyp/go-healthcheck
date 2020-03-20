@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 )
 
 var webList []string
@@ -45,4 +48,27 @@ func main() {
 		webList = append(webList, record[0])
 	}
 	fmt.Println(webList)
+
+	// function Timer
+	defer func(begin time.Time) {
+		fmt.Printf("use %v", time.Since(begin).Seconds())
+	}(time.Now())
+	wg := &sync.WaitGroup{}
+	for _, w := range webList {
+		wg.Add(1)
+		go webCheck(w, wg)
+	}
+	wg.Wait()
+}
+
+type webStat struct {
+}
+
+func webCheck(url string, wg *sync.WaitGroup) {
+	fmt.Println("url -> ", url)
+	_, err := http.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: webCheck %v\n", err)
+	}
+	wg.Done()
 }
