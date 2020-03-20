@@ -1,16 +1,15 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/atchapcyp/go-healthcheck/reader"
 )
 
 var webList []string
@@ -21,54 +20,43 @@ func main() {
 		os.Exit(1)
 	}
 
-	termChan := make(chan os.Signal)
-	signal.Notify(termChan, syscall.SIGHUP,
+	terminateChan := make(chan os.Signal)
+	signal.Notify(terminateChan, syscall.SIGHUP,
 		syscall.SIGINT,
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 	go func(c <-chan os.Signal) {
 		<-c
 		os.Exit(0)
-	}(termChan)
+	}(terminateChan)
 
-	csvfile, err := os.Open(os.Args[1])
-	if err != nil {
-		panic(err)
-	}
-
-	r := csv.NewReader(csvfile)
-	for {
-		record, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		webList = append(webList, record[0])
-	}
-	fmt.Println(webList)
-
+	rc := reader.ReadCSVFrom(os.Args[1])
 	// function Timer
-	defer func(begin time.Time) {
-		fmt.Printf("use %v", time.Since(begin).Seconds())
-	}(time.Now())
-	wg := &sync.WaitGroup{}
-	for _, w := range webList {
+	begin := time.Now()
+	var wg sync.WaitGroup
+	fmt.Println("Perform website checking...")
+	for _, r := range rc.Records {
 		wg.Add(1)
-		go webCheck(w, wg)
+		go webCheck(r.URL, &wg)
 	}
 	wg.Wait()
+	fmt.Println("Done!!")
+	done := time.Since(begin).Seconds()
+	fmt.Println("Checked website: ", len(webList))
+	fmt.Println("Total times to finished checking website: ", done)
 }
 
 type webStat struct {
 }
 
 func webCheck(url string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	fmt.Println("url -> ", url)
-	_, err := http.Get(url)
+	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: webCheck %v\n", err)
 	}
-	wg.Done()
+	if resp != nil {
+		fmt.Println(resp.Status)
+	}
 }
