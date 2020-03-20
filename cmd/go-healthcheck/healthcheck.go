@@ -1,10 +1,16 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
+	"log"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 )
+
+var webList []string
 
 func main() {
 	if len(os.Args) != 2 {
@@ -12,20 +18,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	termChan := make(chan os.Signal)
+	signal.Notify(termChan, syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+	go func(c <-chan os.Signal) {
+		<-c
+		os.Exit(0)
+	}(termChan)
 
-	for {
-		select {
-		case <-ticker.C:
-			if readCSV(os.Args[1]) {
-				fmt.Println("done ReadCSV")
-			}
-		}
+	csvfile, err := os.Open(os.Args[1])
+	if err != nil {
+		panic(err)
 	}
-}
 
-func readCSV(path string) bool {
-	fmt.Println("path ", path)
-	return true
+	r := csv.NewReader(csvfile)
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		webList = append(webList, record[0])
+	}
+	fmt.Println(webList)
 }
