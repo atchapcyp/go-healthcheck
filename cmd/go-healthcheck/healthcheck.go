@@ -31,32 +31,42 @@ func main() {
 	}(terminateChan)
 
 	rc := reader.ReadCSVFrom(os.Args[1])
-	// function Timer
-	begin := time.Now()
+
 	var wg sync.WaitGroup
+	var stat = WebStat{wg: &wg}
 	fmt.Println("Perform website checking...")
+	begin := time.Now()
 	for _, r := range rc.Records {
-		wg.Add(1)
-		go webCheck(r.URL, &wg)
+		stat.wg.Add(1)
+		go stat.webCheck(r.URL)
 	}
-	wg.Wait()
+	stat.wg.Wait()
+	stat.totalTime = time.Since(begin)
+
 	fmt.Println("Done!!")
-	done := time.Since(begin).Seconds()
-	fmt.Println("Checked website: ", len(webList))
-	fmt.Println("Total times to finished checking website: ", done)
+	fmt.Printf("Checked website: %d\n", stat.Complete+stat.Failed)
+	fmt.Printf("Successful websites : %d\n", stat.Complete)
+	fmt.Printf("Failure websites : %d\n", stat.Failed)
+	fmt.Println("Total times to finished checking website: ", stat.totalTime.Seconds())
 }
 
-type webStat struct {
+type WebStat struct {
+	Complete  int
+	Failed    int
+	wg        *sync.WaitGroup
+	totalTime time.Duration
 }
 
-func webCheck(url string, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (ws *WebStat) webCheck(url string) {
+	defer ws.wg.Done()
 	fmt.Println("url -> ", url)
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: webCheck %v\n", err)
+		ws.Failed++
 	}
 	if resp != nil {
 		fmt.Println(resp.Status)
+		ws.Complete++
 	}
 }
