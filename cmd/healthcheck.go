@@ -51,7 +51,7 @@ func main() {
 	var wg sync.WaitGroup
 	var stat = WebStat{wg: &wg}
 	fmt.Println("Perform website checking...")
-	go stat.getAccToken()
+	go stat.setAccToken()
 	stat.wg.Add(1)
 	begin := time.Now()
 	for _, r := range rc.Records {
@@ -131,7 +131,7 @@ func (ws *WebStat) SendReport(url string) {
 	fmt.Println("send repost status", resp.Status)
 }
 
-func (ws *WebStat) getAccToken() string {
+func (ws *WebStat) setAccToken() {
 	defer ws.wg.Done()
 	var data = url.Values{}
 	data.Add("grant_type", "refresh_token")
@@ -159,5 +159,5 @@ func (ws *WebStat) getAccToken() string {
 		log.Fatalln(err)
 	}
 
-	return tokenResponse.AccessToken
+	ws.AccessToken = tokenResponse.AccessToken
 }
