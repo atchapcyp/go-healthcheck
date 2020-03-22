@@ -51,6 +51,8 @@ func main() {
 	var wg sync.WaitGroup
 	var stat = WebStat{wg: &wg}
 	fmt.Println("Perform website checking...")
+	go stat.getAccToken()
+	stat.wg.Add(1)
 	begin := time.Now()
 	for _, r := range rc.Records {
 		stat.wg.Add(1)
@@ -65,10 +67,11 @@ func main() {
 }
 
 type WebStat struct {
-	Complete  int
-	Failed    int
-	wg        *sync.WaitGroup
-	totalTime time.Duration
+	Complete    int
+	Failed      int
+	wg          *sync.WaitGroup
+	totalTime   time.Duration
+	AccessToken string
 }
 
 type TokenResponse struct {
@@ -85,7 +88,6 @@ func (ws *WebStat) webCheck(url string) {
 	fmt.Println("url -> ", url)
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: webCheck %v\n", err)
 		ws.Failed++
 	}
 	if resp != nil {
@@ -106,10 +108,9 @@ func (ws *WebStat) totalCheck() int {
 }
 
 func (ws *WebStat) SendReport(url string) {
-	accToken, err := getAccToken()
-	if err != nil {
-		log.Fatalln(err)
-	}
+	defer func(begin time.Time) {
+		fmt.Println("SendReport Done in : ", time.Since(begin).Seconds())
+	}(time.Now())
 
 	reqBody, err := json.Marshal(map[string]interface{}{
 		"total_websites": ws.totalCheck(),
@@ -120,7 +121,7 @@ func (ws *WebStat) SendReport(url string) {
 	var client http.Client
 	request, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(reqBody))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", accToken)
+	request.Header.Set("Authorization", ws.AccessToken)
 	resp, err := client.Do(request)
 	if err != nil {
 		log.Fatalln(err)
@@ -130,7 +131,8 @@ func (ws *WebStat) SendReport(url string) {
 	fmt.Println("send repost status", resp.Status)
 }
 
-func getAccToken() (string, error) {
+func (ws *WebStat) getAccToken() string {
+	defer ws.wg.Done()
 	var data = url.Values{}
 	data.Add("grant_type", "refresh_token")
 	data.Add("refresh_token", "ae6e3myyJpEOK6IkQDB6")
@@ -157,5 +159,5 @@ func getAccToken() (string, error) {
 		log.Fatalln(err)
 	}
 
-	return tokenResponse.AccessToken, nil
+	return tokenResponse.AccessToken
 }
