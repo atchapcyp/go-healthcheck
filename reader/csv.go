@@ -18,7 +18,7 @@ type Record struct {
 }
 
 func ReadCSVFrom(path string) CSVRecords {
-	csvfile, err := os.Open(os.Args[1])
+	csvfile, err := os.Open(path)
 	if err != nil {
 		panic(err)
 	}
