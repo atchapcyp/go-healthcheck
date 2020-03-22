@@ -25,16 +25,10 @@ var (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Require path to csv file")
-		os.Exit(1)
-	}
 	var reportURL, filePath string
 	flag.StringVar(&reportURL, "u", "https://backend-challenge.line-apps.com/healthcheck/report", "Report target URL")
 	flag.StringVar(&filePath, "f", "test.csv", "Path to CSV file")
 	flag.Parse()
-
-	fmt.Println("os env", os.Args)
 
 	terminateChan := make(chan os.Signal)
 	signal.Notify(terminateChan, syscall.SIGHUP,
@@ -85,13 +79,19 @@ type TokenResponse struct {
 
 func (ws *WebStat) webCheck(url string) {
 	defer ws.wg.Done()
-	fmt.Println("url -> ", url)
-	resp, err := http.Get(url)
+	defer func(begin time.Time) {
+		fmt.Println(url, " Done in : ", time.Since(begin).Seconds())
+	}(time.Now())
+
+	tp := &http.Transport{
+		DisableKeepAlives: true,
+	}
+	var client = http.Client{Transport: tp}
+	resp, err := client.Get(url)
 	if err != nil {
 		ws.Failed++
 	}
 	if resp != nil {
-		fmt.Println(resp.Status)
 		ws.Complete++
 	}
 }
@@ -112,23 +112,23 @@ func (ws *WebStat) SendReport(url string) {
 		fmt.Println("SendReport Done in : ", time.Since(begin).Seconds())
 	}(time.Now())
 
-	reqBody, err := json.Marshal(map[string]interface{}{
+	reqBody, _ := json.Marshal(map[string]interface{}{
 		"total_websites": ws.totalCheck(),
 		"success":        ws.Complete,
 		"failure":        ws.Failed,
 		"total_time":     ws.totalTime.Nanoseconds(),
 	})
 	var client http.Client
-	request, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(reqBody))
+	request, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(reqBody))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", ws.AccessToken)
 	resp, err := client.Do(request)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 	}
 
 	defer resp.Body.Close()
-	fmt.Println("send repost status", resp.Status)
+	fmt.Println("send report status", resp.Status)
 }
 
 func (ws *WebStat) setAccToken() {
@@ -144,19 +144,19 @@ func (ws *WebStat) setAccToken() {
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(request)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println("unable to request for access token: ", err)
 	}
 
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalln(err)
+		log.Println("unable to read access token response: ", err)
 	}
 
 	var tokenResponse TokenResponse
 	if err := json.Unmarshal(body, &tokenResponse); err != nil {
-		log.Fatalln(err)
+		log.Println("unable to unmarshal for access token", err)
 	}
 
 	ws.AccessToken = tokenResponse.AccessToken
