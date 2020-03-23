@@ -109,12 +109,12 @@ func (ws *WebStat) webCheck(url string, client HttpClienter) {
 	}
 
 	resp, err := client.Do(request)
-	if err != nil {
-		ws.Failed++
-	}
 	if resp != nil {
 		ws.Complete++
+	} else if err != nil {
+		ws.Failed++
 	}
+
 }
 
 func (ws *WebStat) printReport() {
