@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/atchapcyp/go-healthcheck/reader"
 )
 
@@ -23,6 +25,27 @@ var (
 	webList        []string
 	TokenAccessURL = "https://api.line.me/oauth2/v2.1/token"
 )
+
+type WebStat struct {
+	Complete    int
+	Failed      int
+	wg          *sync.WaitGroup
+	totalTime   time.Duration
+	AccessToken string
+}
+
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	ExpiredIn    int    `json:"expires_in"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	Scope        string `json:"scope"`
+	TokenType    string `json:"token_type"`
+}
+
+type HttpClienter interface {
+	Do(req *http.Request) (*http.Response, error)
+}
 
 func main() {
 	var reportURL, filePath string
@@ -45,49 +68,47 @@ func main() {
 	var wg sync.WaitGroup
 	var stat = WebStat{wg: &wg}
 	fmt.Println("Perform website checking...")
-	go stat.setAccToken()
-	stat.wg.Add(1)
+
+	if err := stat.setAccToken(NewHttpClient()); err != nil {
+		panic(err)
+	}
+
 	begin := time.Now()
 	for _, r := range rc.Records {
 		stat.wg.Add(1)
-		go stat.webCheck(r.URL)
+		go stat.webCheck(r.URL, NewHttpClient())
 	}
 	stat.wg.Wait()
 	stat.totalTime = time.Since(begin)
 
 	fmt.Println("Done!!")
+
+	if status := stat.sendReport(reportURL, NewHttpClient()); status != 200 {
+		log.Println("SendReport failed ... ", status)
+		return
+	}
 	stat.printReport()
-	stat.SendReport(reportURL)
 }
 
-type WebStat struct {
-	Complete    int
-	Failed      int
-	wg          *sync.WaitGroup
-	totalTime   time.Duration
-	AccessToken string
+func NewHttpClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+	}}
 }
 
-type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	ExpiredIn    int    `json:"expires_in"`
-	IDToken      string `json:"id_token"`
-	RefreshToken string `json:"refresh_token"`
-	Scope        string `json:"scope"`
-	TokenType    string `json:"token_type"`
-}
-
-func (ws *WebStat) webCheck(url string) {
+func (ws *WebStat) webCheck(url string, client HttpClienter) {
 	defer ws.wg.Done()
 	defer func(begin time.Time) {
 		fmt.Println(url, " Done in : ", time.Since(begin).Seconds())
 	}(time.Now())
 
-	tp := &http.Transport{
-		DisableKeepAlives: true,
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		ws.Failed++
+		return
 	}
-	var client = http.Client{Transport: tp}
-	resp, err := client.Get(url)
+
+	resp, err := client.Do(request)
 	if err != nil {
 		ws.Failed++
 	}
@@ -107,18 +128,13 @@ func (ws *WebStat) totalCheck() int {
 	return ws.Complete + ws.Failed
 }
 
-func (ws *WebStat) SendReport(url string) {
-	defer func(begin time.Time) {
-		fmt.Println("SendReport Done in : ", time.Since(begin).Seconds())
-	}(time.Now())
-
+func (ws *WebStat) sendReport(url string, client HttpClienter) int {
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"total_websites": ws.totalCheck(),
 		"success":        ws.Complete,
 		"failure":        ws.Failed,
 		"total_time":     ws.totalTime.Nanoseconds(),
 	})
-	var client http.Client
 	request, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(reqBody))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", ws.AccessToken)
@@ -128,36 +144,36 @@ func (ws *WebStat) SendReport(url string) {
 	}
 
 	defer resp.Body.Close()
-	fmt.Println("send report status", resp.Status)
+	return resp.StatusCode
 }
 
-func (ws *WebStat) setAccToken() {
-	defer ws.wg.Done()
+func (ws *WebStat) setAccToken(client HttpClienter) error {
 	var data = url.Values{}
 	data.Add("grant_type", "refresh_token")
 	data.Add("refresh_token", "ae6e3myyJpEOK6IkQDB6")
 	data.Add("redirect_uro", "https://line-login-starter-20200321.herokuapp.com/auth")
 	data.Add("client_id", "1653974782")
 	data.Add("client_secret", "6830866844101ec965f282daca7b8808")
-	var client http.Client
 	request, err := http.NewRequest(http.MethodPost, TokenAccessURL, strings.NewReader(data.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := client.Do(request)
-	if err != nil {
-		log.Println("unable to request for access token: ", err)
+
+	var resp *http.Response
+	if resp, err = client.Do(request); err != nil || resp == nil {
+		return errors.Wrapf(err, "unable to get access token")
 	}
 
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Println("unable to read access token response: ", err)
+		return errors.Wrapf(err, "unable to read access token response")
 	}
 
 	var tokenResponse TokenResponse
 	if err := json.Unmarshal(body, &tokenResponse); err != nil {
-		log.Println("unable to unmarshal for access token", err)
+		return errors.Wrapf(err, "unable to unmarshal for access token")
 	}
 
 	ws.AccessToken = tokenResponse.AccessToken
+	return nil
 }
