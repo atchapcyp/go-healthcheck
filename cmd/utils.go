@@ -5,7 +5,7 @@ import (
 	"syscall"
 )
 
-func FileDescriptorSize() int {
+func fileDescriptorSize() int {
 	var rLimit syscall.Rlimit
 	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 	if err != nil {

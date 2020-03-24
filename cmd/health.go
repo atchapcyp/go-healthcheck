@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-
-	"github.com/atchapcyp/go-healthcheck/reader"
 )
 
 var (
@@ -63,20 +61,27 @@ func main() {
 		os.Exit(0)
 	}(terminateChan)
 
-	rc := reader.ReadCSVFrom(filePath)
+	noFile := fileDescriptorSize()
+	if noFile < 0 {
+		noFile = 100
+	}
+
+	urls := readCSVFrom(filePath)
 
 	var wg sync.WaitGroup
 	var stat = WebStat{wg: &wg}
-	fmt.Println("Perform website checking...")
+
+	queue := stat.requestComposer(urls)
 
 	if err := stat.setAccToken(NewHttpClient()); err != nil {
 		panic(err)
 	}
+	fmt.Println("Perform website checking...")
 
 	begin := time.Now()
-	for _, r := range rc.Records {
+	for i := 0; i < 30; i++ {
 		stat.wg.Add(1)
-		go stat.webCheck(r.URL, NewHttpClient())
+		go stat.requestSender(queue, i)
 	}
 	stat.wg.Wait()
 	stat.totalTime = time.Since(begin)
@@ -107,14 +112,20 @@ func (ws *WebStat) webCheck(url string, client HttpClienter) {
 		ws.Failed++
 		return
 	}
+	request.Header.Set("Connection", "close")
+	request.Close = true
 
-	resp, err := client.Do(request)
+	resp, err := http.Get(url)
 	if resp != nil {
 		ws.Complete++
-	} else if err != nil {
-		ws.Failed++
+		resp.Body.Close()
+		resp.Close = true
+		// resp.Close = true
 	}
-
+	if err != nil {
+		ws.Failed++
+		fmt.Println("webCheck error : ", err)
+	}
 }
 
 func (ws *WebStat) printReport() {
@@ -176,4 +187,47 @@ func (ws *WebStat) setAccToken(client HttpClienter) error {
 
 	ws.AccessToken = tokenResponse.AccessToken
 	return nil
+}
+
+func (ws *WebStat) requestComposer(urls []string) chan *http.Request {
+	queue := make(chan *http.Request)
+
+	go func() {
+		for _, url := range urls {
+			req, _ := http.NewRequest(http.MethodGet, url, nil)
+			queue <- req
+		}
+
+		close(queue)
+	}()
+
+	return queue
+}
+
+func (ws *WebStat) requestSender(queue chan *http.Request, id int) {
+	defer func() { ws.wg.Done() }()
+
+	client := &http.Client{}
+
+	for {
+		select {
+		case req, ok := <-queue:
+			if !ok {
+				return
+			}
+
+			resp, err := client.Do(req)
+			if resp != nil {
+				ws.Complete++
+				resp.Body.Close()
+			}
+			if err != nil {
+				ws.Failed++
+				fmt.Println("requestSender error : ", err)
+			}
+			time.Sleep(time.Millisecond * 10)
+			fmt.Printf("consumer No: %d, url: %s\n", id, string(req.URL.String()))
+		}
+	}
+
 }

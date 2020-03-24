@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-func ReadCSVFrom(path string) []string {
+func readCSVFrom(path string) []string {
 	csvfile, err := os.Open(path)
 	if err != nil {
 		panic(err)
