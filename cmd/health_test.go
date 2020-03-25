@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -23,6 +24,52 @@ func TestSendReport(t *testing.T) {
 		actual := ws.sendReport("/random/url", mockClient)
 		expect := http.StatusNotFound
 		assert.Equal(t, expect, actual)
+	})
+}
+
+func TestSenderConsumer(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	t.Run("10000 request 100 sender", func(t *testing.T) {
+		var wg sync.WaitGroup
+		var ws = WebStat{wg: &wg}
+		var urls []string
+		requestCount := 10000
+		for i := 0; i < requestCount; i++ {
+			urls = append(urls, ts.URL)
+		}
+
+		queue := make(chan *http.Request)
+		ws.requestComposer(urls, queue)
+		for i := 0; i < 100; i++ {
+			ws.wg.Add(1)
+			go ws.requestSender(queue)
+		}
+		ws.wg.Wait()
+
+		assert.Equal(t, requestCount, ws.totalCheck(), "Total response are not equal to number of request")
+	})
+
+	t.Run("100 request 100 sender", func(t *testing.T) {
+		var wg sync.WaitGroup
+		var ws = WebStat{wg: &wg}
+		var urls []string
+		requestCount := 100
+		for i := 0; i < requestCount; i++ {
+			urls = append(urls, ts.URL)
+		}
+
+		queue := make(chan *http.Request)
+		ws.requestComposer(urls, queue)
+		for i := 0; i < 100; i++ {
+			ws.wg.Add(1)
+			go ws.requestSender(queue)
+		}
+		ws.wg.Wait()
+
+		assert.Equal(t, requestCount, ws.totalCheck(), "Total response are not equal to number of request")
 	})
 }
 
@@ -57,39 +104,5 @@ func TestSetAccessToken(t *testing.T) {
 		err := ws.setAccToken(mockClient)
 		assert.Error(t, err)
 		assert.Zero(t, ws.AccessToken)
-	})
-}
-
-func TestWebRequest(t *testing.T) {
-	t.Run("any response code should increment completed site", func(t *testing.T) {
-		var wg sync.WaitGroup
-		var ws = WebStat{wg: &wg}
-
-		var httpStatusList = []int{101, 200, 201, 202, 204, 400, 401, 402, 403, 404, 500, 501, 502}
-		for i, s := range httpStatusList {
-			mockClient := &MockClient{
-				TargetStatus: s,
-			}
-			ws.wg.Add(1)
-			ws.webCheck("random/url", mockClient)
-			assert.Equal(t, i+1, ws.Complete)
-			assert.Equal(t, i+1, ws.totalCheck())
-		}
-	})
-
-	t.Run("should increase failed site", func(t *testing.T) {
-		var wg sync.WaitGroup
-		var ws = WebStat{wg: &wg}
-		var httpStatusList = []int{101, 200, 201, 202, 204, 400, 401, 402, 403, 404, 500, 501, 502}
-		for i, s := range httpStatusList {
-			mockClient := &MockClient{
-				TargetStatus:         s,
-				ConnectionTerminated: true, // terminate every connection.
-			}
-			ws.wg.Add(1)
-			ws.webCheck("random/url", mockClient)
-			assert.Equal(t, i+1, ws.Failed)
-			assert.Equal(t, i+1, ws.totalCheck())
-		}
 	})
 }

@@ -47,8 +47,10 @@ type HttpClienter interface {
 
 func main() {
 	var reportURL, filePath string
+	var fileDescriptorPercent int
 	flag.StringVar(&reportURL, "u", "https://backend-challenge.line-apps.com/healthcheck/report", "Report target URL")
 	flag.StringVar(&filePath, "f", "test.csv", "Path to CSV file")
+	flag.IntVar(&fileDescriptorPercent, "p", 70, "Percentage of Max file descriptors.")
 	flag.Parse()
 
 	terminateChan := make(chan os.Signal)
@@ -61,28 +63,30 @@ func main() {
 		os.Exit(0)
 	}(terminateChan)
 
-	noFile := fileDescriptorSize()
-	if noFile < 0 {
-		noFile = 100
+	// max define the maximum number of the request consumer
+	// max should less than current file discriptor limit to prevent io error
+	max := fileDescriptorSize()
+	if max < 0 {
+		max = 100
 	}
+	max = max * fileDescriptorPercent / 100
 
 	urls := readCSVFrom(filePath)
-
 	var wg sync.WaitGroup
 	var stat = WebStat{wg: &wg}
-
-	queue := stat.requestComposer(urls)
 
 	if err := stat.setAccToken(NewHttpClient()); err != nil {
 		panic(err)
 	}
 	fmt.Println("Perform website checking...")
 
+	queue := make(chan *http.Request)
 	begin := time.Now()
-	for i := 0; i < 30; i++ {
+	for i := 0; i < max; i++ {
 		stat.wg.Add(1)
-		go stat.requestSender(queue, i)
+		go stat.requestSender(queue)
 	}
+	stat.requestComposer(urls, queue)
 	stat.wg.Wait()
 	stat.totalTime = time.Since(begin)
 
@@ -98,34 +102,7 @@ func main() {
 func NewHttpClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DisableKeepAlives: true,
-	}, Timeout: time.Duration(time.Second * 20)}
-}
-
-func (ws *WebStat) webCheck(url string, client HttpClienter) {
-	defer ws.wg.Done()
-	defer func(begin time.Time) {
-		fmt.Println(url, " Done in : ", time.Since(begin).Seconds())
-	}(time.Now())
-
-	request, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		ws.Failed++
-		return
-	}
-	request.Header.Set("Connection", "close")
-	request.Close = true
-
-	resp, err := http.Get(url)
-	if resp != nil {
-		ws.Complete++
-		resp.Body.Close()
-		resp.Close = true
-		// resp.Close = true
-	}
-	if err != nil {
-		ws.Failed++
-		fmt.Println("webCheck error : ", err)
-	}
+	}, Timeout: time.Duration(time.Second * 30), Jar: nil}
 }
 
 func (ws *WebStat) printReport() {
@@ -189,23 +166,24 @@ func (ws *WebStat) setAccToken(client HttpClienter) error {
 	return nil
 }
 
-func (ws *WebStat) requestComposer(urls []string) chan *http.Request {
-	queue := make(chan *http.Request)
-
+func (ws *WebStat) requestComposer(urls []string, queue chan *http.Request) {
 	go func() {
-		for _, url := range urls {
+		var totalCompose int
+		for i, url := range urls {
+
 			req, _ := http.NewRequest(http.MethodGet, url, nil)
 			queue <- req
+			totalCompose = i
 		}
+
+		fmt.Println("total create", totalCompose+1)
 
 		close(queue)
 	}()
-
-	return queue
 }
 
-func (ws *WebStat) requestSender(queue chan *http.Request, id int) {
-	defer func() { ws.wg.Done() }()
+func (ws *WebStat) requestSender(queue chan *http.Request) {
+	defer ws.wg.Done()
 
 	client := NewHttpClient()
 	for {
@@ -222,11 +200,8 @@ func (ws *WebStat) requestSender(queue chan *http.Request, id int) {
 			}
 			if err != nil {
 				ws.Failed++
-				fmt.Println("requestSender error : ", err)
+				log.Println("Error request to ", req.URL.String(), "err :", err)
 			}
-			time.Sleep(time.Millisecond * 10)
-			fmt.Printf("consumer No: %d, url: %s\n", id, string(req.URL.String()))
 		}
 	}
-
 }
