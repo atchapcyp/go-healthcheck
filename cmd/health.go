@@ -98,7 +98,7 @@ func main() {
 func NewHttpClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DisableKeepAlives: true,
-	}}
+	}, Timeout: time.Duration(time.Second * 20)}
 }
 
 func (ws *WebStat) webCheck(url string, client HttpClienter) {
@@ -207,8 +207,7 @@ func (ws *WebStat) requestComposer(urls []string) chan *http.Request {
 func (ws *WebStat) requestSender(queue chan *http.Request, id int) {
 	defer func() { ws.wg.Done() }()
 
-	client := &http.Client{}
-
+	client := NewHttpClient()
 	for {
 		select {
 		case req, ok := <-queue:
