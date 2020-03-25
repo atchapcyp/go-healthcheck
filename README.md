@@ -1,22 +1,31 @@
+## Environment Setup
+
+Requirements
+
+- Go 1.12+
+
 ## Building
 
 Make sure `GOPATH` is defined and run
 
 ```shell
-LOOM_SRC=$GOPATH/src/github.com/atchapcyp/healthcheck-cmd
+REPO_SRC=$GOPATH/src/github.com/atchapcyp/go-healthcheck
 # clone into gopath
-git clone git@github.com:loomnetwork/loomchain.git $LOOM_SRC
-# install deps
-cd $LOOM_SRC
-make deps
-make
+git clone git@github.com:atchapcyp/go-healthcheck.git $REPO_SRC
+# install dependencies
+cd $REPO_SRC
+make build
 ```
 
 ## Running
 
 ```shell
-# init the blockchain with builtin contracts
-./loom init
-# run the node
-./loom run
+# run with specific file and set request sender amount and request timeout limit.
+./health -f weblist.csv -n 100 -t 30
+```
+
+or
+
+```
+go run `ls cmd/*.go | grep -v _test.go` -f weblist.csv -n 100
 ```
