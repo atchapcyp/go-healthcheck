@@ -30,6 +30,7 @@ type WebStat struct {
 	wg          *sync.WaitGroup
 	totalTime   time.Duration
 	AccessToken string
+	timeout     int
 }
 
 type TokenResponse struct {
@@ -47,10 +48,11 @@ type HttpClienter interface {
 
 func main() {
 	var reportURL, filePath string
-	var fileDescriptorPercent int
+	var goroutineNum, requestTimeout int
 	flag.StringVar(&reportURL, "u", "https://backend-challenge.line-apps.com/healthcheck/report", "Report target URL")
 	flag.StringVar(&filePath, "f", "test.csv", "Path to CSV file")
-	flag.IntVar(&fileDescriptorPercent, "p", 70, "Percentage of Max file descriptors.")
+	flag.IntVar(&goroutineNum, "n", 70, "A number of concurrent request.")
+	flag.IntVar(&requestTimeout, "t", 30, "Request time out in second")
 	flag.Parse()
 
 	terminateChan := make(chan os.Signal)
@@ -63,46 +65,50 @@ func main() {
 		os.Exit(0)
 	}(terminateChan)
 
-	// max define the maximum number of the request consumer
-	// max should less than current file discriptor limit to prevent io error
-	max := fileDescriptorSize()
-	if max < 0 {
-		max = 100
+	// goroutineNum define the maximum number of the request consumer
+	// goroutineNum should less than current file discriptor limit to prevent io error
+	// WARNING : Using a too big `goroutineNum` means this program need to handle a large amount of goroutine.
+	fs := fileDescriptorSize()
+	if fs > 0 && fs < goroutineNum {
+		goroutineNum = fs * 7 / 10
 	}
-	max = max * fileDescriptorPercent / 100
 
 	urls := readCSVFrom(filePath)
-	var wg sync.WaitGroup
-	var stat = WebStat{wg: &wg}
 
-	if err := stat.setAccToken(NewHttpClient()); err != nil {
+	var ws = WebStat{
+		wg:      &sync.WaitGroup{},
+		timeout: requestTimeout}
+
+	if err := ws.setAccToken(NewHttpClient(requestTimeout)); err != nil {
 		panic(err)
 	}
 	fmt.Println("Perform website checking...")
 
 	queue := make(chan *http.Request)
 	begin := time.Now()
-	for i := 0; i < max; i++ {
-		stat.wg.Add(1)
-		go stat.requestSender(queue)
+	for i := 0; i < goroutineNum; i++ {
+		ws.wg.Add(1)
+		go ws.requestSender(queue)
 	}
-	stat.requestComposer(urls, queue)
-	stat.wg.Wait()
-	stat.totalTime = time.Since(begin)
+	ws.requestComposer(urls, queue)
+	ws.wg.Wait()
+	ws.totalTime = time.Since(begin)
 
 	fmt.Println("Done!!")
 
-	if status := stat.sendReport(reportURL, NewHttpClient()); status != 200 {
+	if status := ws.sendReport(reportURL, NewHttpClient(requestTimeout)); status != 200 {
 		log.Println("SendReport failed ... ", status)
 		return
 	}
-	stat.printReport()
+	ws.printReport()
+
+	fmt.Println("goroutine num", goroutineNum)
 }
 
-func NewHttpClient() *http.Client {
+func NewHttpClient(t int) *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DisableKeepAlives: true,
-	}, Timeout: time.Duration(time.Second * 30), Jar: nil}
+	}, Timeout: time.Duration(time.Duration(t) * time.Second), Jar: nil}
 }
 
 func (ws *WebStat) printReport() {
@@ -168,16 +174,11 @@ func (ws *WebStat) setAccToken(client HttpClienter) error {
 
 func (ws *WebStat) requestComposer(urls []string, queue chan *http.Request) {
 	go func() {
-		var totalCompose int
-		for i, url := range urls {
+		for _, url := range urls {
 
 			req, _ := http.NewRequest(http.MethodGet, url, nil)
 			queue <- req
-			totalCompose = i
 		}
-
-		fmt.Println("total create", totalCompose+1)
-
 		close(queue)
 	}()
 }
@@ -185,7 +186,7 @@ func (ws *WebStat) requestComposer(urls []string, queue chan *http.Request) {
 func (ws *WebStat) requestSender(queue chan *http.Request) {
 	defer ws.wg.Done()
 
-	client := NewHttpClient()
+	client := NewHttpClient(ws.timeout)
 	for {
 		select {
 		case req, ok := <-queue:
